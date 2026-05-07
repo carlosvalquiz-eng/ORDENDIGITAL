@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PD Imaging — Orden radiológica digital
  * Description: Procesa el envío del formulario, guarda la orden con enlace único y notifica por correo al dueño, paciente y doctor (compatible con WP Mail SMTP).
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: PD Imaging
  * Text Domain: pd-imaging-orden
  */
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('PD_IMAGING_ORDEN_VERSION', '1.0.0');
+define('PD_IMAGING_ORDEN_VERSION', '1.0.1');
 define('PD_IMAGING_ORDEN_PATH', plugin_dir_path(__FILE__));
 define('PD_IMAGING_ORDEN_URL', plugin_dir_url(__FILE__));
 
@@ -350,14 +350,81 @@ function pd_imaging_orden_maybe_render(): void
 }
 
 /**
- * Shortcode: coloque justo después de abrir &lt;form id="pd-form"&gt; …
+ * Campos ocultos de nonce + honeypot (misma acción que en el procesador).
+ */
+function pd_imaging_orden_nonce_fields_html(): string
+{
+    $honeypot = '<input type="text" name="pd_hp_check" value="" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;" tabindex="-1" autocomplete="off" aria-hidden="true">';
+    return wp_nonce_field('pd_procesar_orden', 'pd_orden_nonce', true, false) . $honeypot;
+}
+
+/**
+ * Inserta el nonce dentro de &lt;form id="pd-form"&gt; si aún no existe.
+ * Cubre páginas donde el shortcode no se ejecuta (p. ej. bloque HTML personalizado).
+ */
+function pd_imaging_orden_inject_nonce_into_markup(string $html): string
+{
+    if (stripos($html, 'pd-form') === false) {
+        return $html;
+    }
+    if (preg_match('/name\\s*=\\s*["\']pd_orden_nonce["\']/i', $html)) {
+        return $html;
+    }
+    if (!preg_match('/<form\\b[^>]*\\bid\\s*=\\s*["\']pd-form["\'][^>]*>/i', $html)) {
+        return $html;
+    }
+    $inject = pd_imaging_orden_nonce_fields_html();
+    $out = preg_replace(
+        '/<form\\b([^>]*\\bid\\s*=\\s*["\']pd-form["\'][^>]*)>/i',
+        '<form$1>' . $inject,
+        $html,
+        1,
+        $count
+    );
+    return ($count > 0) ? $out : $html;
+}
+
+/**
+ * Si el markup del formulario no pasó por filtros de contenido, añade nonce en el pie.
+ * No actúa si el campo ya existe (p. ej. shortcode o inyección previa).
+ */
+function pd_imaging_orden_footer_nonce_fallback(): void
+{
+    if (is_admin()) {
+        return;
+    }
+    $nonce = wp_create_nonce('pd_procesar_orden');
+    ?>
+<script>
+(function(){
+var f=document.getElementById('pd-form');
+if(!f||f.querySelector('input[name="pd_orden_nonce"]'))return;
+var n=document.createElement('input');
+n.type='hidden';
+n.name='pd_orden_nonce';
+n.value=<?php echo wp_json_encode($nonce); ?>;
+f.insertBefore(n,f.firstChild);
+var h=document.createElement('input');
+h.type='text';
+h.name='pd_hp_check';
+h.value='';
+h.setAttribute('autocomplete','off');
+h.setAttribute('aria-hidden','true');
+h.tabIndex=-1;
+h.style.cssText='position:absolute!important;left:-9999px!important;width:1px!important;height:1px!important;opacity:0!important';
+f.insertBefore(h,f.firstChild);
+})();
+</script>
+    <?php
+}
+
+/**
+ * Shortcode opcional: coloque justo después de abrir &lt;form id="pd-form"&gt; …
  * [pd_orden_nonce]
  */
 function pd_imaging_orden_shortcode_nonce(): string
 {
-    $field = wp_nonce_field('pd_procesar_orden', 'pd_orden_nonce', true, false);
-    $honeypot = '<input type="text" name="pd_hp_check" value="" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;" tabindex="-1" autocomplete="off" aria-hidden="true">';
-    return $field . $honeypot;
+    return pd_imaging_orden_nonce_fields_html();
 }
 
 add_action('init', 'pd_imaging_orden_register_cpt');
@@ -365,6 +432,29 @@ add_action('admin_post_nopriv_procesar_orden_pd', 'pd_imaging_orden_handle_post'
 add_action('admin_post_procesar_orden_pd', 'pd_imaging_orden_handle_post');
 add_action('template_redirect', 'pd_imaging_orden_maybe_render', 0);
 add_action('wp_enqueue_scripts', 'pd_imaging_orden_enqueue_assets');
+add_filter('the_content', 'pd_imaging_orden_inject_nonce_into_markup', 20);
+
+/**
+ * Bloques HTML del editor (contenido sin pasar siempre por the_content completo).
+ *
+ * @param string                $block_content
+ * @param array<string, mixed> $block
+ */
+function pd_imaging_orden_render_block_inject(string $block_content, array $block): string
+{
+    if (($block['blockName'] ?? '') !== 'core/html') {
+        return $block_content;
+    }
+    return pd_imaging_orden_inject_nonce_into_markup($block_content);
+}
+
+add_filter('render_block', 'pd_imaging_orden_render_block_inject', 10, 2);
+
+add_action('elementor/loaded', static function (): void {
+    add_filter('elementor/frontend/the_content', 'pd_imaging_orden_inject_nonce_into_markup');
+});
+
+add_action('wp_footer', 'pd_imaging_orden_footer_nonce_fallback', 50);
 
 add_shortcode('pd_orden_nonce', 'pd_imaging_orden_shortcode_nonce');
 
