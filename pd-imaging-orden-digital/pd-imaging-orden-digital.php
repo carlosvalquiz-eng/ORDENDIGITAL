@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PD Imaging — Orden radiológica digital
  * Description: Procesa el envío del formulario, guarda la orden con enlace único y notifica por correo al dueño, paciente y doctor (compatible con WP Mail SMTP).
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: PD Imaging
  * Text Domain: pd-imaging-orden
  */
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('PD_IMAGING_ORDEN_VERSION', '1.0.1');
+define('PD_IMAGING_ORDEN_VERSION', '1.0.2');
 define('PD_IMAGING_ORDEN_PATH', plugin_dir_path(__FILE__));
 define('PD_IMAGING_ORDEN_URL', plugin_dir_url(__FILE__));
 
@@ -385,26 +385,38 @@ function pd_imaging_orden_inject_nonce_into_markup(string $html): string
 }
 
 /**
- * Si el markup del formulario no pasó por filtros de contenido, añade nonce en el pie.
- * No actúa si el campo ya existe (p. ej. shortcode o inyección previa).
+ * Devuelve un nonce válido vía AJAX (sin caché). Sirve para páginas cacheadas donde el HTML lleva un nonce caducado.
+ */
+function pd_imaging_orden_ajax_issue_nonce(): void
+{
+    nocache_headers();
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
+    wp_send_json_success(
+        [
+            'nonce' => wp_create_nonce('pd_procesar_orden'),
+        ]
+    );
+}
+
+/**
+ * En el pie: si existe #pd-form, pide un nonce fresco a admin-ajax y lo aplica (DOMContentLoaded + siempre sobrescribe).
  */
 function pd_imaging_orden_footer_nonce_fallback(): void
 {
     if (is_admin()) {
         return;
     }
-    $nonce = wp_create_nonce('pd_procesar_orden');
+
+    $ajax_url = admin_url('admin-ajax.php');
     ?>
 <script>
 (function(){
-var f=document.getElementById('pd-form');
-if(!f||f.querySelector('input[name="pd_orden_nonce"]'))return;
-var n=document.createElement('input');
-n.type='hidden';
-n.name='pd_orden_nonce';
-n.value=<?php echo wp_json_encode($nonce); ?>;
-f.insertBefore(n,f.firstChild);
-var h=document.createElement('input');
+var ajaxUrl=<?php echo wp_json_encode($ajax_url); ?>;
+function ensureHoney(f){
+var h=f.querySelector('input[name="pd_hp_check"]');
+if(h)return;
+h=document.createElement('input');
 h.type='text';
 h.name='pd_hp_check';
 h.value='';
@@ -413,6 +425,28 @@ h.setAttribute('aria-hidden','true');
 h.tabIndex=-1;
 h.style.cssText='position:absolute!important;left:-9999px!important;width:1px!important;height:1px!important;opacity:0!important';
 f.insertBefore(h,f.firstChild);
+}
+function applyNonce(f,nonce){
+if(!f||!nonce)return;
+var i=f.querySelector('input[name="pd_orden_nonce"]');
+if(!i){i=document.createElement('input');i.type='hidden';i.name='pd_orden_nonce';f.insertBefore(i,f.firstChild);}
+i.value=nonce;
+ensureHoney(f);
+}
+function refreshNonce(){
+var f=document.getElementById('pd-form');
+if(!f)return;
+ensureHoney(f);
+var url=ajaxUrl+'?action=pd_imaging_orden_nonce&_='+Date.now();
+fetch(url,{credentials:'same-origin',cache:'no-store'})
+.then(function(r){return r.json();})
+.then(function(d){
+if(d&&d.success&&d.data&&d.data.nonce)applyNonce(f,d.data.nonce);
+})
+.catch(function(){});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refreshNonce);
+else refreshNonce();
 })();
 </script>
     <?php
@@ -428,11 +462,14 @@ function pd_imaging_orden_shortcode_nonce(): string
 }
 
 add_action('init', 'pd_imaging_orden_register_cpt');
+add_action('wp_ajax_nopriv_pd_imaging_orden_nonce', 'pd_imaging_orden_ajax_issue_nonce');
+add_action('wp_ajax_pd_imaging_orden_nonce', 'pd_imaging_orden_ajax_issue_nonce');
 add_action('admin_post_nopriv_procesar_orden_pd', 'pd_imaging_orden_handle_post');
 add_action('admin_post_procesar_orden_pd', 'pd_imaging_orden_handle_post');
 add_action('template_redirect', 'pd_imaging_orden_maybe_render', 0);
 add_action('wp_enqueue_scripts', 'pd_imaging_orden_enqueue_assets');
 add_filter('the_content', 'pd_imaging_orden_inject_nonce_into_markup', 20);
+add_filter('widget_block_content', 'pd_imaging_orden_inject_nonce_into_markup', 20);
 
 /**
  * Bloques HTML del editor (contenido sin pasar siempre por the_content completo).
@@ -454,7 +491,7 @@ add_action('elementor/loaded', static function (): void {
     add_filter('elementor/frontend/the_content', 'pd_imaging_orden_inject_nonce_into_markup');
 });
 
-add_action('wp_footer', 'pd_imaging_orden_footer_nonce_fallback', 50);
+add_action('wp_footer', 'pd_imaging_orden_footer_nonce_fallback', 999);
 
 add_shortcode('pd_orden_nonce', 'pd_imaging_orden_shortcode_nonce');
 
