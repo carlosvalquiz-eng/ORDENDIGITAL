@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PD Imaging — Orden radiológica digital
  * Description: Procesa el envío del formulario, guarda la orden con enlace único y notifica por correo al dueño, paciente y doctor (compatible con WP Mail SMTP).
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: PD Imaging
  * Text Domain: pd-imaging-orden
  */
@@ -11,9 +11,18 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('PD_IMAGING_ORDEN_VERSION', '1.0.2');
+define('PD_IMAGING_ORDEN_VERSION', '1.0.3');
 define('PD_IMAGING_ORDEN_PATH', plugin_dir_path(__FILE__));
 define('PD_IMAGING_ORDEN_URL', plugin_dir_url(__FILE__));
+
+/**
+ * URL del logo PD Imaging (correos y vistas; filtrable).
+ */
+function pd_imaging_orden_logo_url(): string
+{
+    $default = 'https://pd-imaging.com/wp-content/uploads/2026/04/pd-imaging-centro-de-imagenes-logo.png';
+    return apply_filters('pd_imaging_orden_logo_url', $default);
+}
 
 require_once PD_IMAGING_ORDEN_PATH . 'includes/order-view.php';
 
@@ -23,6 +32,15 @@ require_once PD_IMAGING_ORDEN_PATH . 'includes/order-view.php';
 function pd_imaging_orden_owner_email(): string
 {
     return apply_filters('pd_imaging_orden_owner_email', get_option('admin_email'));
+}
+
+/**
+ * ID de página de WordPress donde se muestra la orden (hero del tema + contenido).
+ * 0 = modo anterior: pantalla completa sin tema.
+ */
+function pd_imaging_orden_get_view_page_id(): int
+{
+    return (int) apply_filters('pd_imaging_orden_view_page_id', (int) get_option('pd_imaging_orden_view_page_id', 0));
 }
 
 /**
@@ -91,6 +109,13 @@ function pd_imaging_orden_save(array $data): ?int
 
 function pd_imaging_orden_get_public_url(string $token): string
 {
+    $page_id = pd_imaging_orden_get_view_page_id();
+    if ($page_id > 0) {
+        $permalink = get_permalink($page_id);
+        if (is_string($permalink) && $permalink !== '') {
+            return add_query_arg('pd_orden', rawurlencode($token), $permalink);
+        }
+    }
     return add_query_arg('pd_orden', rawurlencode($token), home_url('/'));
 }
 
@@ -127,13 +152,75 @@ function pd_imaging_orden_get_data(WP_Post $post): ?array
 }
 
 /**
- * Plantilla HTML de correo (tablas + estilos inline para clientes de correo).
+ * @param array<string, mixed> $data
  */
-function pd_imaging_orden_email_wrap(string $heading, string $body_html, string $button_url, string $button_label): string
+function pd_imaging_orden_email_esc_field(array $data, string $key): string
+{
+    $v = isset($data[$key]) ? trim((string) $data[$key]) : '';
+    return $v !== '' ? esc_html($v) : '—';
+}
+
+/**
+ * Bloque de firma con logo PD Imaging (HTML para correo).
+ */
+function pd_imaging_orden_email_signature_html(): string
+{
+    $logo = esc_url(pd_imaging_orden_logo_url());
+    $name = esc_html__('PD Imaging — Centro de Imágenes', 'pd-imaging-orden');
+    $line1 = esc_html__('Diagnóstico por imagen de alta calidad', 'pd-imaging-orden');
+    $home = home_url('/');
+    $link_text = esc_html(preg_replace('#^https?://#', '', $home));
+
+    return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;border-top:1px solid #e2e8f0;padding-top:20px;">'
+        . '<tr><td>'
+        . '<img src="' . $logo . '" alt="PD Imaging" width="200" style="max-width:200px;height:auto;display:block;margin-bottom:12px;border:0;">'
+        . '<p style="margin:0 0 4px;font-size:14px;font-weight:700;color:#0c2340;">' . $name . '</p>'
+        . '<p style="margin:0 0 4px;font-size:13px;color:#475569;line-height:1.45;">' . $line1 . '</p>'
+        . '<p style="margin:0;font-size:13px;color:#64748b;"><a href="' . esc_url($home) . '" style="color:#4c65a4;text-decoration:none;">' . $link_text . '</a></p>'
+        . '</td></tr></table>';
+}
+
+/**
+ * Resumen paciente + doctor en tabla para correo.
+ *
+ * @param array<string, mixed> $data
+ */
+function pd_imaging_orden_email_summary_table_html(array $data): string
+{
+    $rows = [
+        [__('Paciente', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'paciente_nombre')],
+        [__('Edad', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'paciente_edad')],
+        [__('DNI / Carnet', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'paciente_dni')],
+        [__('Celular (paciente)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'paciente_celular')],
+        [__('Correo (paciente)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'paciente_correo')],
+        [__('Doctor(a)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'doctor_nombre')],
+        [__('COP', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'doctor_cop')],
+        [__('Celular (doctor)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'doctor_celular')],
+        [__('Correo (doctor)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'doctor_correo')],
+        [__('Dirección (consultorio)', 'pd-imaging-orden'), pd_imaging_orden_email_esc_field($data, 'doctor_direccion')],
+    ];
+
+    $out = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">';
+    foreach ($rows as $row) {
+        $out .= '<tr><td style="padding:10px 14px;font-size:13px;color:#64748b;width:38%;border-bottom:1px solid #f1f5f9;vertical-align:top;">'
+            . esc_html($row[0]) . '</td>'
+            . '<td style="padding:10px 14px;font-size:14px;color:#0f172a;border-bottom:1px solid #f1f5f9;">' . $row[1] . '</td></tr>';
+    }
+    $out .= '</table>';
+    return $out;
+}
+
+/**
+ * Plantilla HTML de correo (tablas + estilos inline para clientes de correo).
+ *
+ * @param string $signature_html Firma al pie del cuerpo (logo PD Imaging, etc.).
+ */
+function pd_imaging_orden_email_wrap(string $heading, string $body_html, string $button_url, string $button_label, string $signature_html = ''): string
 {
     $safe_heading = esc_html($heading);
     $site = esc_html(get_bloginfo('name'));
     $year = (int) gmdate('Y');
+    $sig = $signature_html !== '' ? $signature_html : pd_imaging_orden_email_signature_html();
 
     return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         . '<title>' . $safe_heading . '</title></head><body style="margin:0;padding:0;background:#f1f5f9;">'
@@ -153,6 +240,7 @@ function pd_imaging_orden_email_wrap(string $heading, string $body_html, string 
         . esc_html__('Si el botón no funciona, copie y pegue este enlace en su navegador:', 'pd-imaging-orden')
         . '<br><a href="' . esc_url($button_url) . '" style="color:#4c65a4;">' . esc_html($button_url) . '</a>'
         . '</p>'
+        . $sig
         . '</td></tr>'
         . '</table>'
         . '<p style="margin:16px 0 0;font-family:Inter,system-ui,-apple-system,sans-serif;font-size:12px;color:#94a3b8;">© ' . esc_html((string) $year) . ' ' . $site . '</p>'
@@ -166,6 +254,8 @@ function pd_imaging_orden_send_notifications(int $post_id, array $data, string $
 {
     $patient_name = isset($data['paciente_nombre']) ? $data['paciente_nombre'] : '';
     $doctor_name = isset($data['doctor_nombre']) ? $data['doctor_nombre'] : '';
+    $summary = pd_imaging_orden_email_summary_table_html($data);
+    $sig = ''; // firma por defecto en wrap
 
     $headers = ['Content-Type: text/html; charset=UTF-8'];
 
@@ -185,37 +275,67 @@ function pd_imaging_orden_send_notifications(int $post_id, array $data, string $
                 esc_html($patient_name !== '' ? $patient_name : '—'),
                 esc_html($doctor_name !== '' ? $doctor_name : '—')
             ) . '</p>'
+                . $summary
                 . '<p>' . esc_html__('Puede abrir o imprimir la orden desde el siguiente enlace.', 'pd-imaging-orden') . '</p>',
             $public_url,
-            __('Ver / descargar orden', 'pd-imaging-orden')
+            __('Ver / descargar orden', 'pd-imaging-orden'),
+            $sig
         );
         wp_mail($owner, $subject, $body, $headers);
     }
 
     $patient_mail = isset($data['paciente_correo']) ? sanitize_email($data['paciente_correo']) : '';
     if ($patient_mail && is_email($patient_mail)) {
-        $subject = __('Su orden radiológica PD Imaging — enlace de descarga', 'pd-imaging-orden');
+        $greet = $patient_name !== ''
+            ? sprintf(
+                /* translators: %s: patient first name or full name */
+                esc_html__('Estimado/a %s,', 'pd-imaging-orden'),
+                esc_html($patient_name)
+            )
+            : esc_html__('Estimado/a paciente,', 'pd-imaging-orden');
+        $subject = sprintf(
+            /* translators: %s: site name */
+            __('Su orden radiológica — %s', 'pd-imaging-orden'),
+            wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES)
+        );
+        $body_inner = '<p style="margin:0 0 12px;">' . $greet . '</p>'
+            . '<p>' . esc_html__('Gracias por completar su orden digital en PD Imaging. A continuación resumimos los datos registrados junto con su médico tratante.', 'pd-imaging-orden') . '</p>'
+            . $summary
+            . '<p>' . esc_html__('Desde el siguiente enlace podrá ver la orden con el mismo formato del sitio web. Use «Imprimir» o «Guardar como PDF» en su navegador para conservar una copia.', 'pd-imaging-orden') . '</p>';
         $body = pd_imaging_orden_email_wrap(
-            __('Gracias por completar su orden', 'pd-imaging-orden'),
-            '<p>' . esc_html__('Adjuntamos el enlace para ver e imprimir su orden radiológica en el mismo formato del sitio web (use Imprimir / Guardar como PDF en su navegador).', 'pd-imaging-orden') . '</p>',
+            __('Su orden radiológica digital', 'pd-imaging-orden'),
+            $body_inner,
             $public_url,
-            __('Abrir mi orden', 'pd-imaging-orden')
+            __('Abrir mi orden', 'pd-imaging-orden'),
+            $sig
         );
         wp_mail($patient_mail, $subject, $body, $headers);
     }
 
     $doctor_mail = isset($data['doctor_correo']) ? sanitize_email($data['doctor_correo']) : '';
     if ($doctor_mail && is_email($doctor_mail)) {
+        $greet_doc = $doctor_name !== ''
+            ? sprintf(
+                /* translators: %s: doctor name */
+                esc_html__('Estimado/a Dr(a). %s,', 'pd-imaging-orden'),
+                esc_html($doctor_name)
+            )
+            : esc_html__('Estimado/a doctor(a),', 'pd-imaging-orden');
         $subject = sprintf(
             /* translators: %s patient name */
-            __('Orden radiológica — paciente %s', 'pd-imaging-orden'),
+            __('Orden radiológica digital — paciente %s', 'pd-imaging-orden'),
             $patient_name !== '' ? $patient_name : __('(sin nombre)', 'pd-imaging-orden')
         );
+        $body_inner = '<p style="margin:0 0 12px;">' . $greet_doc . '</p>'
+            . '<p>' . esc_html__('Se ha registrado una orden radiológica con los datos siguientes. Puede revisar el detalle clínico y las indicaciones desde el enlace.', 'pd-imaging-orden') . '</p>'
+            . $summary
+            . '<p>' . esc_html__('El enlace abre la orden completa para consulta o archivo en PDF.', 'pd-imaging-orden') . '</p>';
         $body = pd_imaging_orden_email_wrap(
-            __('Orden radiológica digital', 'pd-imaging-orden'),
-            '<p>' . esc_html__('Puede consultar la orden completa y descargarla en PDF desde el enlace.', 'pd-imaging-orden') . '</p>',
+            __('Notificación de orden — PD Imaging', 'pd-imaging-orden'),
+            $body_inner,
             $public_url,
-            __('Ver orden', 'pd-imaging-orden')
+            __('Ver orden del paciente', 'pd-imaging-orden'),
+            $sig
         );
         wp_mail($doctor_mail, $subject, $body, $headers);
     }
@@ -286,6 +406,183 @@ function pd_imaging_orden_register_cpt(): void
     );
 }
 
+/**
+ * Botón imprimir + contenedor de la orden (vista pública).
+ *
+ * @param array<string, mixed> $data
+ */
+function pd_imaging_orden_render_public_order_fragment(array $data): void
+{
+    echo '<div class="pd-order-public-wrap">';
+    pd_imaging_render_order_view($data, ['readonly' => true]);
+    echo '<div class="pd-view-actions pd-view-actions--footer">';
+    echo '<button type="button" class="pd-download-btn" onclick="window.print()">' . esc_html__('Descargar / imprimir PDF', 'pd-imaging-orden') . '</button>';
+    echo '</div></div>';
+}
+
+/**
+ * Respuesta HTTP para ?pd_orden= : incrustado en página del tema o pantalla completa.
+ */
+function pd_imaging_orden_template_public_orden(): void
+{
+    if (is_admin() || (defined('DOING_AJAX') && DOING_AJAX) || is_customize_preview()) {
+        return;
+    }
+
+    if (empty($_GET['pd_orden'])) {
+        return;
+    }
+
+    $token = sanitize_text_field(wp_unslash((string) $_GET['pd_orden']));
+    if ($token === '') {
+        return;
+    }
+
+    unset($GLOBALS['pd_imaging_orden_embed'], $GLOBALS['pd_imaging_orden_public_error'], $GLOBALS['pd_imaging_orden_embed_rendered']);
+
+    $page_id = pd_imaging_orden_get_view_page_id();
+    $order_post = pd_imaging_orden_find_by_token($token);
+
+    if ($page_id > 0) {
+        if (!$order_post) {
+            if (is_page($page_id)) {
+                $GLOBALS['pd_imaging_orden_public_error'] = 'not_found';
+            } else {
+                $permalink = get_permalink($page_id);
+                if (is_string($permalink) && $permalink !== '') {
+                    nocache_headers();
+                    wp_safe_redirect(add_query_arg('pd_orden', rawurlencode($token), $permalink));
+                    exit;
+                }
+            }
+            return;
+        }
+
+        $data = pd_imaging_orden_get_data($order_post);
+        if ($data === null) {
+            if (is_page($page_id)) {
+                $GLOBALS['pd_imaging_orden_public_error'] = 'no_data';
+            } else {
+                $permalink = get_permalink($page_id);
+                if (is_string($permalink) && $permalink !== '') {
+                    nocache_headers();
+                    wp_safe_redirect(add_query_arg('pd_orden', rawurlencode($token), $permalink));
+                    exit;
+                }
+            }
+            return;
+        }
+
+        if (!is_page($page_id)) {
+            $permalink = get_permalink($page_id);
+            if (is_string($permalink) && $permalink !== '') {
+                nocache_headers();
+                wp_safe_redirect(add_query_arg('pd_orden', rawurlencode($token), $permalink));
+                exit;
+            }
+            // Página configurada no disponible: mostrar orden a pantalla completa en esta URL.
+        } else {
+            $GLOBALS['pd_imaging_orden_embed'] = [
+                'data'  => $data,
+                'token' => $token,
+            ];
+            nocache_headers();
+            header('X-Robots-Tag: noindex, nofollow', true);
+            return;
+        }
+    }
+
+    if (!$order_post) {
+        status_header(404);
+        nocache_headers();
+        wp_die(esc_html__('Orden no encontrada o el enlace ha caducado.', 'pd-imaging-orden'), 404);
+    }
+
+    $data = pd_imaging_orden_get_data($order_post);
+    if ($data === null) {
+        status_header(404);
+        nocache_headers();
+        wp_die(esc_html__('No hay datos para esta orden.', 'pd-imaging-orden'), 404);
+    }
+
+    nocache_headers();
+    header('X-Robots-Tag: noindex, nofollow', true);
+
+    echo '<!DOCTYPE html><html ';
+    language_attributes();
+    echo '><head><meta charset="';
+    bloginfo('charset');
+    echo '"><meta name="viewport" content="width=device-width, initial-scale=1">';
+    wp_head();
+    echo '</head><body class="pd-order-public">';
+    pd_imaging_orden_render_public_order_fragment($data);
+    wp_footer();
+    echo '</body></html>';
+    exit;
+}
+
+/**
+ * Tras el contenido de la página configurada: orden + botón PDF abajo a la derecha.
+ */
+function pd_imaging_orden_append_embed_to_content(string $content): string
+{
+    if (is_admin()) {
+        return $content;
+    }
+
+    $page_id = pd_imaging_orden_get_view_page_id();
+    if ($page_id <= 0 || !is_singular('page') || (int) get_queried_object_id() !== $page_id) {
+        return $content;
+    }
+
+    if (!empty($GLOBALS['pd_imaging_orden_embed_rendered'])) {
+        return $content;
+    }
+
+    if (!empty($GLOBALS['pd_imaging_orden_public_error'])) {
+        $code = (string) $GLOBALS['pd_imaging_orden_public_error'];
+        if ($code === 'not_found') {
+            $msg = __('Orden no encontrada o el enlace no es válido.', 'pd-imaging-orden');
+        } elseif ($code === 'no_data') {
+            $msg = __('No hay datos para esta orden.', 'pd-imaging-orden');
+        } else {
+            $msg = __('No se pudo mostrar la orden.', 'pd-imaging-orden');
+        }
+        $GLOBALS['pd_imaging_orden_embed_rendered'] = true;
+        return $content . '<div class="pd-order-public-error" style="max-width:960px;margin:2rem auto;padding:1rem 1.25rem;background:#fef2f2;border:1px solid #fecaca;border-radius:12px;color:#991b1b;font-family:system-ui,sans-serif;">'
+            . '<p style="margin:0;">' . esc_html($msg) . '</p></div>';
+    }
+
+    if (empty($GLOBALS['pd_imaging_orden_embed']) || !is_array($GLOBALS['pd_imaging_orden_embed'])) {
+        return $content;
+    }
+
+    $embed = $GLOBALS['pd_imaging_orden_embed'];
+    $data = isset($embed['data']) && is_array($embed['data']) ? $embed['data'] : null;
+    if ($data === null) {
+        return $content;
+    }
+
+    $GLOBALS['pd_imaging_orden_embed_rendered'] = true;
+    ob_start();
+    pd_imaging_orden_render_public_order_fragment($data);
+    return $content . ob_get_clean();
+}
+
+/**
+ * Clase en body cuando la orden va embebida (estilos del tema + orden).
+ *
+ * @param string[] $classes
+ * @return string[]
+ */
+function pd_imaging_orden_body_class_public(array $classes): array
+{
+    if (!empty($_GET['pd_orden']) && !is_admin() && pd_imaging_orden_get_view_page_id() > 0 && !empty($GLOBALS['pd_imaging_orden_embed'])) {
+        $classes[] = 'pd-order-public';
+    }
+    return $classes;
+}
+
 function pd_imaging_orden_enqueue_assets(): void
 {
     if (empty($_GET['pd_orden'])) {
@@ -303,50 +600,6 @@ function pd_imaging_orden_enqueue_assets(): void
         ['pd-imaging-inter'],
         PD_IMAGING_ORDEN_VERSION
     );
-}
-
-function pd_imaging_orden_maybe_render(): void
-{
-    if (empty($_GET['pd_orden']) || is_admin()) {
-        return;
-    }
-
-    $token = sanitize_text_field(wp_unslash((string) $_GET['pd_orden']));
-    if ($token === '') {
-        return;
-    }
-
-    $post = pd_imaging_orden_find_by_token($token);
-    if (!$post) {
-        status_header(404);
-        nocache_headers();
-        wp_die(esc_html__('Orden no encontrada o el enlace ha caducado.', 'pd-imaging-orden'), 404);
-    }
-
-    $data = pd_imaging_orden_get_data($post);
-    if ($data === null) {
-        status_header(404);
-        nocache_headers();
-        wp_die(esc_html__('No hay datos para esta orden.', 'pd-imaging-orden'), 404);
-    }
-
-    nocache_headers();
-    header('X-Robots-Tag: noindex, nofollow', true);
-
-    echo '<!DOCTYPE html><html ';
-    language_attributes();
-    echo '><head><meta charset="';
-    bloginfo('charset');
-    echo '"><meta name="viewport" content="width=device-width, initial-scale=1">';
-    wp_head();
-    echo '</head><body class="pd-order-public">';
-    echo '<div class="pd-view-actions" style="max-width:1600px;margin:0 auto;padding:1rem;text-align:center;font-family:Inter,system-ui,sans-serif;">';
-    echo '<button type="button" class="pd-download-btn" onclick="window.print()">' . esc_html__('Descargar / imprimir PDF', 'pd-imaging-orden') . '</button>';
-    echo '</div>';
-    pd_imaging_render_order_view($data, ['readonly' => true]);
-    wp_footer();
-    echo '</body></html>';
-    exit;
 }
 
 /**
@@ -461,13 +714,79 @@ function pd_imaging_orden_shortcode_nonce(): string
     return pd_imaging_orden_nonce_fields_html();
 }
 
+function pd_imaging_orden_register_order_settings(): void
+{
+    register_setting(
+        'pd_imaging_orden_settings',
+        'pd_imaging_orden_view_page_id',
+        [
+            'type'              => 'integer',
+            'sanitize_callback' => 'absint',
+            'default'           => 0,
+        ]
+    );
+}
+
+function pd_imaging_orden_add_settings_page(): void
+{
+    add_submenu_page(
+        'edit.php?post_type=pd_rd_order',
+        __('Enlace público de la orden', 'pd-imaging-orden'),
+        __('Enlace público', 'pd-imaging-orden'),
+        'manage_options',
+        'pd-imaging-orden-settings',
+        'pd_imaging_orden_render_settings_page'
+    );
+}
+
+function pd_imaging_orden_render_settings_page(): void
+{
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    ?>
+    <div class="wrap">
+        <h1><?php echo esc_html__('Orden digital — página del enlace', 'pd-imaging-orden'); ?></h1>
+        <p class="description"><?php echo esc_html__('Elija una página de WordPress para abrir las órdenes desde el correo. Podrá diseñar un hero y contenido arriba; la orden y el botón de PDF se mostrarán debajo.', 'pd-imaging-orden'); ?></p>
+        <form method="post" action="options.php">
+            <?php settings_fields('pd_imaging_orden_settings'); ?>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row">
+                        <label for="pd_imaging_orden_view_page_id"><?php echo esc_html__('Página de vista de la orden', 'pd-imaging-orden'); ?></label>
+                    </th>
+                    <td>
+                        <?php
+                        wp_dropdown_pages(
+                            [
+                                'name'              => 'pd_imaging_orden_view_page_id',
+                                'id'                => 'pd_imaging_orden_view_page_id',
+                                'show_option_none'  => __('— Sin página (pantalla completa, sin tema) —', 'pd-imaging-orden'),
+                                'option_none_value' => '0',
+                                'selected'          => pd_imaging_orden_get_view_page_id(),
+                            ]
+                        );
+                        ?>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
+
 add_action('init', 'pd_imaging_orden_register_cpt');
+add_action('admin_init', 'pd_imaging_orden_register_order_settings');
+add_action('admin_menu', 'pd_imaging_orden_add_settings_page');
 add_action('wp_ajax_nopriv_pd_imaging_orden_nonce', 'pd_imaging_orden_ajax_issue_nonce');
 add_action('wp_ajax_pd_imaging_orden_nonce', 'pd_imaging_orden_ajax_issue_nonce');
 add_action('admin_post_nopriv_procesar_orden_pd', 'pd_imaging_orden_handle_post');
 add_action('admin_post_procesar_orden_pd', 'pd_imaging_orden_handle_post');
-add_action('template_redirect', 'pd_imaging_orden_maybe_render', 0);
+add_action('template_redirect', 'pd_imaging_orden_template_public_orden', 0);
 add_action('wp_enqueue_scripts', 'pd_imaging_orden_enqueue_assets');
+add_filter('body_class', 'pd_imaging_orden_body_class_public');
+add_filter('the_content', 'pd_imaging_orden_append_embed_to_content', 25);
 add_filter('the_content', 'pd_imaging_orden_inject_nonce_into_markup', 20);
 add_filter('widget_block_content', 'pd_imaging_orden_inject_nonce_into_markup', 20);
 
@@ -489,6 +808,7 @@ add_filter('render_block', 'pd_imaging_orden_render_block_inject', 10, 2);
 
 add_action('elementor/loaded', static function (): void {
     add_filter('elementor/frontend/the_content', 'pd_imaging_orden_inject_nonce_into_markup');
+    add_filter('elementor/frontend/the_content', 'pd_imaging_orden_append_embed_to_content', 25);
 });
 
 add_action('wp_footer', 'pd_imaging_orden_footer_nonce_fallback', 999);
