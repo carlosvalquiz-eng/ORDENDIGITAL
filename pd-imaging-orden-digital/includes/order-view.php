@@ -41,7 +41,7 @@ function pd_imaging_render_order_view(array $data, array $opts = []): void
     $sex_m = $rad('paciente_sexo', 'M');
     $sex_f = $rad('paciente_sexo', 'F');
 
-    $logo = 'https://pd-imaging.com/wp-content/uploads/2026/04/pd-imaging-centro-de-imagenes-logo.png';
+    $logo = pd_imaging_orden_logo_url();
 
     $tomo_left_rows = [
         ['18', '17', '16', '15', '14', '13', '12', '11'],

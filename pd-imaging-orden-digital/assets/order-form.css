@@ -537,6 +537,25 @@
 
 .pd-download-btn:active { transform: scale(0.97); }
 
+/* Vista pública: orden + acciones al pie */
+.pd-order-public-wrap {
+    max-width: 1600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.pd-view-actions--footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    width: 100%;
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 2.5rem;
+    box-sizing: border-box;
+    font-family: Inter, system-ui, sans-serif;
+}
+
 .pd-scroll::-webkit-scrollbar { height: 6px; }
 
 .pd-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
@@ -576,7 +595,7 @@
     .pd-form-wrapper { background: white; padding: 0; }
     .pd-form-container { box-shadow: none; border: none; max-width: 100%; }
     .pd-submit-area, .pd-social { display: none !important; }
-    .pd-view-actions { display: none !important; }
+    .pd-view-actions, .pd-view-actions--footer { display: none !important; }
     .pd-box, .pd-card { page-break-inside: avoid; }
     .pd-odonto-container { overflow: hidden; }
 }
